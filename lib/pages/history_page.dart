@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:hive/hive.dart';
 import 'package:intl/intl.dart';
 import '../core/color_extensions.dart';
+import '../core/oil_change_helper.dart';
 import '../widgets/history_entry_dialog.dart';
 
 class HistoryPage extends StatefulWidget {
@@ -81,9 +82,15 @@ class _HistoryPageState extends State<HistoryPage> {
   Future<void> _exportCSV() async {
     final items = _items;
     final rows = <List<String>>[];
-    rows.add(['date', 'km', 'note']);
+    rows.add(['date', 'km', 'oli', 'interval_km', 'interval_bulan', 'cost', 'place', 'notes']);
     for (var m in items) {
-      rows.add([m['date']?.toString() ?? '', m['km']?.toString() ?? '', m['note']?.toString() ?? '']);
+      final intervalKm = m['intervalKm']?.toString() ?? '5000';
+      final intervalBulan = m['intervalBulan']?.toString() ?? '3';
+      final cost = m['cost']?.toString() ?? '';
+      final place = m['place']?.toString() ?? '';
+      final notes = m['notes']?.toString() ?? '';
+      final oli = m['oli']?.toString() ?? '';
+      rows.add([m['date']?.toString() ?? '', m['km']?.toString() ?? '', oli, intervalKm, intervalBulan, cost, place, notes]);
     }
 
     final csv = rows.map((r) => r.map((c) => '"${c.replaceAll('"', '""')}"').join(',')).join('\n');
@@ -240,13 +247,85 @@ class _HistoryPageState extends State<HistoryPage> {
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
                                 const SizedBox(height: 6),
-                                Text(
-                                  '${m['km']} KM',
-                                  style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16),
+                                // KM dan Oli Type
+                                Row(
+                                  children: [
+                                    Text(
+                                      '${m['km']} KM',
+                                      style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 16),
+                                    ),
+                                    const SizedBox(width: 8),
+                                    if ((m['oli']?.toString() ?? '').isNotEmpty)
+                                      Expanded(
+                                        child: Text(
+                                          '• ${m['oli']}',
+                                          style: const TextStyle(color: Colors.orange, fontSize: 12),
+                                          maxLines: 1,
+                                          overflow: TextOverflow.ellipsis,
+                                        ),
+                                      ),
+                                  ],
                                 ),
-                                if (note.isNotEmpty) ...[
+                                const SizedBox(height: 6),
+                                // Interval KM dan Bulan
+                                Row(
+                                  children: [
+                                    Container(
+                                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                                      decoration: BoxDecoration(
+                                        color: Colors.orange.withOpacity(0.3),
+                                        borderRadius: BorderRadius.circular(6),
+                                      ),
+                                      child: Text(
+                                        'Interval: ${m['intervalKm'] ?? 5000} KM / ${m['intervalBulan'] ?? 3} bulan',
+                                        style: const TextStyle(
+                                          color: Colors.orange,
+                                          fontSize: 10,
+                                          fontWeight: FontWeight.bold,
+                                        ),
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                                const SizedBox(height: 6),
+                                // Biaya dan Tempat
+                                Row(
+                                  children: [
+                                    if ((m['cost']?.toString() ?? '').isNotEmpty) ...[
+                                      Icon(Icons.attach_money, color: Colors.green, size: 14),
+                                      Text(
+                                        'Rp ${m['cost']}',
+                                        style: const TextStyle(color: Colors.green, fontSize: 11, fontWeight: FontWeight.bold),
+                                      ),
+                                      const SizedBox(width: 12),
+                                    ],
+                                    if ((m['place']?.toString() ?? '').isNotEmpty)
+                                      Expanded(
+                                        child: Row(
+                                          children: [
+                                            Icon(Icons.location_on, color: Colors.red, size: 14),
+                                            const SizedBox(width: 3),
+                                            Expanded(
+                                              child: Text(
+                                                m['place'] ?? '',
+                                                style: const TextStyle(color: Colors.red, fontSize: 11),
+                                                maxLines: 1,
+                                                overflow: TextOverflow.ellipsis,
+                                              ),
+                                            ),
+                                          ],
+                                        ),
+                                      ),
+                                  ],
+                                ),
+                                if ((m['notes']?.toString() ?? '').isNotEmpty) ...[
                                   const SizedBox(height: 6),
-                                  Text(note, style: const TextStyle(color: Colors.white54, fontSize: 13)),
+                                  Text(
+                                    m['notes'] ?? '',
+                                    style: const TextStyle(color: Colors.white54, fontSize: 12),
+                                    maxLines: 2,
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
                                 ],
                               ],
                             ),

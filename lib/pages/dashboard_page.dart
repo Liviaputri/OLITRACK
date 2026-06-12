@@ -3,9 +3,11 @@ import 'package:hive/hive.dart';
 import 'package:fl_chart/fl_chart.dart';
 import 'package:intl/intl.dart';
 import '../core/color_extensions.dart';
+import '../core/oil_change_helper.dart';
 import '../services/notification_service.dart';
 import '../widgets/history_entry_dialog.dart';
 import 'history_page.dart';
+import 'statistics_page.dart';
 
 class DashboardPage extends StatefulWidget {
   const DashboardPage({super.key});
@@ -76,10 +78,22 @@ class _DashboardPageState extends State<DashboardPage>
   }
 
   String get status {
-    final useKm = kmSinceLastChange;
-    if (useKm < 3000) return "AMAN";
-    if (useKm < 5000) return "HAMPIR GANTI";
-    return "WAJIB GANTI";
+    if (lastOilChangeDate == null || lastOilChangeKm == null) {
+      return "DATA BELUM LENGKAP";
+    }
+    
+    try {
+      final lastDate = DateTime.parse(lastOilChangeDate!);
+      return OilChangeHelper.getStatus(
+        km,
+        lastOilChangeKm!,
+        lastIntervalKm,
+        lastDate,
+        lastIntervalBulan,
+      );
+    } catch (_) {
+      return "AMAN";
+    }
   }
 
   @override
@@ -138,6 +152,21 @@ class _DashboardPageState extends State<DashboardPage>
                   ),
                 ),
             ],
+          ),
+
+          IconButton(
+            onPressed: () {
+              Navigator.push(context, MaterialPageRoute(builder: (_) => const StatisticsPage()));
+            },
+            icon: Container(
+              padding: const EdgeInsets.all(8),
+              decoration: BoxDecoration(
+                color: Colors.blue.withOpacityValue(0.12),
+                shape: BoxShape.circle,
+              ),
+              child: const Icon(Icons.bar_chart, color: Colors.blue),
+            ),
+            tooltip: 'Statistik',
           ),
 
           IconButton(
@@ -291,7 +320,13 @@ class _DashboardPageState extends State<DashboardPage>
 
             const SizedBox(height: 28),
 
-            // 📊 PROGRESS CARD - ENHANCED
+            // � NEXT SERVICE SCHEDULE
+            if (lastOilChangeDate != null && lastOilChangeKm != null)
+              _buildNextServiceCard(),
+
+            const SizedBox(height: 28),
+
+            // �📊 PROGRESS CARD - ENHANCED
             _buildGradientSectionCard(
               accentColor: Colors.orange,
               child: Column(
@@ -946,10 +981,8 @@ class _DashboardPageState extends State<DashboardPage>
 
   List<Map<String, Object>> _notificationsData() {
     final items = <Map<String, Object>>[];
-    final threshold = _getNextThreshold();
-    final since = kmSinceLastChange;
 
-    if (lastOilChangeKm == null) {
+    if (lastOilChangeKm == null || lastOilChangeDate == null) {
       items.add({
         'icon': Icons.info,
         'title': 'Riwayat belum lengkap',
@@ -958,57 +991,110 @@ class _DashboardPageState extends State<DashboardPage>
         'color': Colors.orange,
       });
     } else {
-      if (!reminderEnabled) {
+      try {
+        final lastDate = DateTime.parse(lastOilChangeDate!);
+        final priority = OilChangeHelper.getPriority(
+          km,
+          lastOilChangeKm!,
+          lastIntervalKm,
+          lastDate,
+          lastIntervalBulan,
+        );
+
+        final nextChangeKm = OilChangeHelper.getNextChangeKm(lastOilChangeKm!, lastIntervalKm);
+        final nextChangeDate = OilChangeHelper.getNextChangeDate(lastDate, lastIntervalBulan);
+        final remainingKm = OilChangeHelper.getRemainingKm(km, lastOilChangeKm!, lastIntervalKm);
+        final remainingDays = OilChangeHelper.getRemainingDays(lastDate, lastIntervalBulan);
+
+        if (priority == 'KM_OVERDUE') {
+          items.add({
+            'icon': Icons.error,
+            'title': 'GANTI OLI SEKARANG - MELEWATI BATAS KM',
+            'message': 'KM sudah mencapai $km (melebihi batas $nextChangeKm KM). Ganti oli sekarang!',
+            'time': 'Baru saja',
+            'color': Colors.red,
+          });
+        } else if (priority == 'DATE_OVERDUE') {
+          final dateFormat = DateFormat('dd MMM yyyy').format(nextChangeDate);
+          items.add({
+            'icon': Icons.error,
+            'title': 'GANTI OLI SEKARANG - MELEWATI BATAS TANGGAL',
+            'message': 'Sudah melewati batas tanggal $dateFormat. Ganti oli sekarang!',
+            'time': 'Baru saja',
+            'color': Colors.red,
+          });
+        } else if (priority == 'KM') {
+          if (remainingKm <= 500) {
+            items.add({
+              'icon': Icons.warning_amber,
+              'title': 'PERHATIAN: KM HAMPIR HABIS',
+              'message': 'Sisa $remainingKm KM menuju batas ganti ($nextChangeKm KM). Siapkan oli baru.',
+              'time': 'Baru saja',
+              'color': Colors.orange,
+            });
+          } else if (remainingKm <= 2000) {
+            items.add({
+              'icon': Icons.notifications_active,
+              'title': 'Reminder: Ganti oli dalam $remainingKm KM',
+              'message': 'Target KM: $nextChangeKm KM. Interval: ${lastIntervalKm} KM.',
+              'time': 'Baru saja',
+              'color': Colors.blue,
+            });
+          } else {
+            items.add({
+              'icon': Icons.check_circle_outline,
+              'title': 'Status: Aman (prioritas KM)',
+              'message': 'Masih ada $remainingKm KM sebelum perlu ganti. Tanggal batas: ${DateFormat('dd MMM yyyy').format(nextChangeDate)}',
+              'time': 'Baru saja',
+              'color': Colors.green,
+            });
+          }
+        } else {
+          // priority == 'DATE'
+          if (remainingDays <= 7) {
+            items.add({
+              'icon': Icons.warning_amber,
+              'title': 'PERHATIAN: TANGGAL HAMPIR TIBA',
+              'message': 'Sisa $remainingDays hari menuju batas ganti. Siapkan oli baru.',
+              'time': 'Baru saja',
+              'color': Colors.orange,
+            });
+          } else if (remainingDays <= 14) {
+            items.add({
+              'icon': Icons.notifications_active,
+              'title': 'Reminder: Ganti oli dalam $remainingDays hari',
+              'message': 'Target tanggal: ${DateFormat('dd MMM yyyy').format(nextChangeDate)}. Interval: ${lastIntervalBulan} bulan.',
+              'time': 'Baru saja',
+              'color': Colors.blue,
+            });
+          } else {
+            items.add({
+              'icon': Icons.check_circle_outline,
+              'title': 'Status: Aman (prioritas Tanggal)',
+              'message': 'Masih ada $remainingDays hari sebelum perlu ganti. Target KM: $nextChangeKm KM',
+              'time': 'Baru saja',
+              'color': Colors.green,
+            });
+          }
+        }
+
+        // Tambahkan info terakhir ganti oli
+        final dateFormat = DateFormat('dd MMM yyyy').format(lastDate);
         items.add({
-          'icon': Icons.notifications_off,
-          'title': 'Reminder dimatikan',
-          'message': 'Aktifkan reminder untuk mendapat notifikasi ganti oli sebelum batas.',
-          'time': 'Baru saja',
-          'color': Colors.white54,
+          'icon': Icons.check_circle,
+          'title': 'Terakhir ganti oli',
+          'message': '$dateFormat pada KM $lastOilChangeKm',
+          'time': 'Riwayat',
+          'color': Colors.cyan,
         });
-      } else if (km < threshold - 500) {
-        items.add({
-          'icon': Icons.notifications_active,
-          'title': 'Reminder aktif',
-          'message': 'Masih aman hingga $threshold KM. Sejak ganti: $since KM.',
-          'time': 'Baru saja',
-          'color': Colors.green,
-        });
-      } else if (km < threshold) {
-        items.add({
-          'icon': Icons.warning_amber,
-          'title': 'KM mendekati batas',
-          'message': 'Sisa kurang dari 500 KM menuju $threshold KM. Siapkan ganti oli.',
-          'time': 'Baru saja',
-          'color': Colors.orange,
-        });
-      } else {
+      } catch (_) {
         items.add({
           'icon': Icons.error,
-          'title': 'Sudah melewati batas',
-          'message': 'KM Anda sudah melewati $threshold KM. Segera ganti oli sekarang.',
+          'title': 'Error',
+          'message': 'Data tanggal tidak valid. Silakan update riwayat ganti oli.',
           'time': 'Baru saja',
           'color': Colors.red,
         });
-      }
-
-      if (historyBox.values.isNotEmpty) {
-        final lastEntry = historyBox.values
-            .whereType<Map>()
-            .where((item) => item['type'] == 'oil_change')
-            .toList()
-            .cast<Map<String, Object?>>();
-        if (lastEntry.isNotEmpty) {
-          final latest = lastEntry.last;
-          final message = 'Terakhir ganti oli ${latest['km']} KM.';
-          items.add({
-            'icon': Icons.check_circle,
-            'title': 'Riwayat terakhir',
-            'message': message,
-            'time': 'Riwayat',
-            'color': Colors.blue,
-          });
-        }
       }
     }
 
@@ -1088,6 +1174,180 @@ class _DashboardPageState extends State<DashboardPage>
       );
       setState(() {});
     }
+  }
+
+  Future<void> _showQuickOilChangeDialog() async {
+    final oliController = TextEditingController();
+    final intervalKmController = TextEditingController(text: '5000');
+    final intervalBulanController = TextEditingController(text: '3');
+    final costController = TextEditingController();
+    final placeController = TextEditingController();
+
+    await showDialog<void>(
+      context: context,
+      builder: (context) {
+        return StatefulBuilder(
+          builder: (context, setState) {
+            return AlertDialog(
+              backgroundColor: const Color(0xFF0F1630),
+              title: const Text(
+                'Ganti Oli Sekarang',
+                style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+              ),
+              content: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    // Info KM saat ini
+                    Container(
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        color: Colors.orange.withOpacity(0.2),
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      child: Row(
+                        children: [
+                          Icon(Icons.speed, color: Colors.orange, size: 20),
+                          const SizedBox(width: 12),
+                          Text(
+                            'KM saat ini: $km KM',
+                            style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+                    // Jenis oli
+                    TextField(
+                      controller: oliController,
+                      style: const TextStyle(color: Colors.white),
+                      decoration: InputDecoration(
+                        labelText: 'Jenis oli (contoh: Castrol 10W-40)',
+                        labelStyle: const TextStyle(color: Colors.white70),
+                        filled: true,
+                        fillColor: const Color(0xFF111A2D),
+                        border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+                        prefixIcon: const Icon(Icons.local_gas_station, color: Colors.orange, size: 20),
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    // Interval KM
+                    TextField(
+                      controller: intervalKmController,
+                      keyboardType: TextInputType.number,
+                      style: const TextStyle(color: Colors.white),
+                      decoration: InputDecoration(
+                        labelText: 'Interval KM berikutnya',
+                        labelStyle: const TextStyle(color: Colors.white70),
+                        filled: true,
+                        fillColor: const Color(0xFF111A2D),
+                        border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+                        prefixIcon: const Icon(Icons.timeline, color: Colors.blue, size: 20),
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    // Interval Bulan
+                    TextField(
+                      controller: intervalBulanController,
+                      keyboardType: TextInputType.number,
+                      style: const TextStyle(color: Colors.white),
+                      decoration: InputDecoration(
+                        labelText: 'Interval Bulan berikutnya',
+                        labelStyle: const TextStyle(color: Colors.white70),
+                        filled: true,
+                        fillColor: const Color(0xFF111A2D),
+                        border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+                        prefixIcon: const Icon(Icons.calendar_today, color: Colors.blue, size: 20),
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    // Biaya
+                    TextField(
+                      controller: costController,
+                      keyboardType: TextInputType.number,
+                      style: const TextStyle(color: Colors.white),
+                      decoration: InputDecoration(
+                        labelText: 'Biaya (Rp) - opsional',
+                        labelStyle: const TextStyle(color: Colors.white70),
+                        filled: true,
+                        fillColor: const Color(0xFF111A2D),
+                        border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+                        prefixIcon: const Icon(Icons.attach_money, color: Colors.green, size: 20),
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    // Tempat
+                    TextField(
+                      controller: placeController,
+                      style: const TextStyle(color: Colors.white),
+                      decoration: InputDecoration(
+                        labelText: 'Tempat (bengkel/toko) - opsional',
+                        labelStyle: const TextStyle(color: Colors.white70),
+                        filled: true,
+                        fillColor: const Color(0xFF111A2D),
+                        border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+                        prefixIcon: const Icon(Icons.location_on, color: Colors.red, size: 20),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.of(context).pop(),
+                  child: const Text('Batal', style: TextStyle(color: Colors.white70)),
+                ),
+                ElevatedButton(
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Colors.orange,
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                  ),
+                  onPressed: () async {
+                    final now = DateTime.now();
+                    
+                    // Tambahkan ke history
+                    try {
+                      await historyBox.add({
+                        'date': now.toIso8601String(),
+                        'km': km,
+                        'oli': oliController.text.trim(),
+                        'intervalKm': int.tryParse(intervalKmController.text.trim()) ?? 5000,
+                        'intervalBulan': int.tryParse(intervalBulanController.text.trim()) ?? 3,
+                        'cost': int.tryParse(costController.text.trim()),
+                        'place': placeController.text.trim().isEmpty ? null : placeController.text.trim(),
+                        'notes': null,
+                      });
+                    } catch (e) {
+                      // ignore: avoid_print
+                      print('Error adding history: $e');
+                    }
+
+                    // Update motor box
+                    motorBox.put('lastOilChangeDate', now.toIso8601String());
+                    motorBox.put('lastOilChangeKm', km);
+                    motorBox.put('reminderEnabled', true);
+                    motorBox.put('nextOilChangeThreshold', km + 5000);
+
+                    if (context.mounted) {
+                      Navigator.of(context).pop();
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(
+                          content: Text('✓ Oli berhasil diganti dan tercatat'),
+                          backgroundColor: Colors.green,
+                          duration: Duration(seconds: 2),
+                        ),
+                      );
+                      setState(() {});
+                    }
+                  },
+                  child: const Text('Ganti & Catat', style: TextStyle(fontWeight: FontWeight.bold)),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
   }
 
   void _showNotificationsSheet() {
@@ -1497,37 +1757,57 @@ class _DashboardPageState extends State<DashboardPage>
   }
 
   Widget _buildQuickActions() {
-    return Row(
-      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+    return Column(
       children: [
-        Expanded(
-          child: _buildActionTile(
-            icon: Icons.add_road,
-            label: 'Tambah Riwayat',
-            color: Colors.deepPurple,
-            onTap: () async {
-              await showHistoryEntryDialog(context, historyBox: historyBox);
-              setState(() {});
-            },
-          ),
+        Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            Expanded(
+              child: _buildActionTile(
+                icon: Icons.add_road,
+                label: 'Tambah Riwayat',
+                color: Colors.deepPurple,
+                onTap: () async {
+                  await showHistoryEntryDialog(context, historyBox: historyBox);
+                  setState(() {});
+                },
+              ),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: _buildActionTile(
+                icon: Icons.speed,
+                label: 'Perbarui KM',
+                color: Colors.green,
+                onTap: _showUpdateKmDialog,
+              ),
+            ),
+          ],
         ),
-        const SizedBox(width: 12),
-        Expanded(
-          child: _buildActionTile(
-            icon: Icons.tune,
-            label: 'Ubah Batas',
-            color: Colors.blueAccent,
-            onTap: _showThresholdDialog,
-          ),
-        ),
-        const SizedBox(width: 12),
-        Expanded(
-          child: _buildActionTile(
-            icon: Icons.speed,
-            label: 'Perbarui KM',
-            color: Colors.green,
-            onTap: _showUpdateKmDialog,
-          ),
+        const SizedBox(height: 12),
+        Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            Expanded(
+              child: _buildActionTile(
+                icon: Icons.local_gas_station,
+                label: 'Ganti Oli Sekarang',
+                color: Colors.orange,
+                onTap: _showQuickOilChangeDialog,
+              ),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: _buildActionTile(
+                icon: Icons.history,
+                label: 'Riwayat Lengkap',
+                color: Colors.cyan,
+                onTap: () {
+                  Navigator.push(context, MaterialPageRoute(builder: (_) => const HistoryPage()));
+                },
+              ),
+            ),
+          ],
         ),
       ],
     );
@@ -1670,14 +1950,161 @@ class _DashboardPageState extends State<DashboardPage>
     );
   }
 
+  Widget _buildNextServiceCard() {
+    try {
+      final lastDate = DateTime.parse(lastOilChangeDate!);
+      final nextKm = OilChangeHelper.getNextChangeKm(lastOilChangeKm!, lastIntervalKm);
+      final nextDate = OilChangeHelper.getNextChangeDate(lastDate, lastIntervalBulan);
+      final remainingKm = OilChangeHelper.getRemainingKm(km, lastOilChangeKm!, lastIntervalKm);
+      final remainingDays = OilChangeHelper.getRemainingDays(lastDate, lastIntervalBulan);
+      final priority = OilChangeHelper.getPriority(km, lastOilChangeKm!, lastIntervalKm, lastDate, lastIntervalBulan);
+
+      final isOverdue = priority == 'KM_OVERDUE' || priority == 'DATE_OVERDUE';
+      final accentColor = isOverdue ? Colors.red : (priority == 'KM' ? Colors.orange : Colors.blue);
+
+      return _buildGradientSectionCard(
+        accentColor: accentColor,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Icon(Icons.calendar_today, color: accentColor, size: 24),
+                const SizedBox(width: 12),
+                Text(
+                  'JADWAL GANTI OLI BERIKUTNYA',
+                  style: TextStyle(
+                    color: accentColor,
+                    fontSize: 14,
+                    fontWeight: FontWeight.bold,
+                    letterSpacing: 0.8,
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 16),
+            Container(
+              padding: const EdgeInsets.all(16),
+              decoration: BoxDecoration(
+                color: accentColor.withOpacity(0.1),
+                borderRadius: BorderRadius.circular(16),
+                border: Border.all(color: accentColor.withOpacity(0.3)),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            'Target Kilometer',
+                            style: TextStyle(color: Colors.white54, fontSize: 11),
+                          ),
+                          const SizedBox(height: 4),
+                          Text(
+                            '$nextKm KM',
+                            style: TextStyle(
+                              color: accentColor,
+                              fontSize: 18,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                          if (remainingKm > 0)
+                            Text(
+                              'Sisa: $remainingKm KM',
+                              style: const TextStyle(color: Colors.white54, fontSize: 11),
+                            )
+                          else
+                            Text(
+                              'SUDAH TERCAPAI',
+                              style: const TextStyle(color: Colors.red, fontSize: 11, fontWeight: FontWeight.bold),
+                            ),
+                        ],
+                      ),
+                      SizedBox(
+                        width: 1.5,
+                        height: 80,
+                        child: Container(color: Colors.white12),
+                      ),
+                      Column(
+                        crossAxisAlignment: CrossAxisAlignment.end,
+                        children: [
+                          Text(
+                            'Target Tanggal',
+                            style: TextStyle(color: Colors.white54, fontSize: 11),
+                          ),
+                          const SizedBox(height: 4),
+                          Text(
+                            DateFormat('dd MMM yyyy').format(nextDate),
+                            style: TextStyle(
+                              color: accentColor,
+                              fontSize: 18,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                          if (remainingDays > 0)
+                            Text(
+                              'Sisa: $remainingDays hari',
+                              style: const TextStyle(color: Colors.white54, fontSize: 11),
+                            )
+                          else
+                            Text(
+                              'SUDAH TERCAPAI',
+                              style: const TextStyle(color: Colors.red, fontSize: 11, fontWeight: FontWeight.bold),
+                            ),
+                        ],
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 12),
+                  Container(
+                    height: 1,
+                    color: Colors.white12,
+                  ),
+                  const SizedBox(height: 12),
+                  Text(
+                    'Prioritas: ${priority == 'KM' ? '🏁 Kilometer' : priority == 'DATE' ? '📅 Tanggal' : '⚠️ OVERDUE'}',
+                    style: TextStyle(
+                      color: accentColor,
+                      fontSize: 12,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  Text(
+                    'Ganti oli sesuai dengan yang tercapai duluan',
+                    style: const TextStyle(color: Colors.white54, fontSize: 11, fontStyle: FontStyle.italic),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      );
+    } catch (_) {
+      return const SizedBox();
+    }
+  }
+
   String _getStatusDescription() {
-    final useKm = kmSinceLastChange;
-    if (useKm < 3000) {
-      return "Kondisi oli masih sangat baik";
-    } else if (useKm < 5000) {
-      return "Segera siapkan oli baru";
-    } else {
-      return "GANTI OLI SEKARANG JUGA!";
+    if (lastOilChangeDate == null || lastOilChangeKm == null) {
+      return "Masukkan catatan ganti oli untuk mendapat informasi akurat";
+    }
+
+    try {
+      final lastDate = DateTime.parse(lastOilChangeDate!);
+      return OilChangeHelper.getDetailedMessage(
+        km,
+        lastOilChangeKm!,
+        lastIntervalKm,
+        lastDate,
+        lastIntervalBulan,
+      );
+    } catch (_) {
+      return "Data tidak valid";
     }
   }
 
@@ -1694,6 +2121,24 @@ class _DashboardPageState extends State<DashboardPage>
     final value = motorBox.get('lastOilChangeKm');
     if (value == null) return null;
     return int.tryParse(value.toString());
+  }
+
+  int get lastIntervalKm {
+    if (historyBox.isEmpty) return 5000;
+    final lastEntry = historyBox.values.cast<Map>().lastWhere(
+      (item) => item['km'] != null,
+      orElse: () => <String, dynamic>{},
+    );
+    return int.tryParse(lastEntry['intervalKm']?.toString() ?? '5000') ?? 5000;
+  }
+
+  int get lastIntervalBulan {
+    if (historyBox.isEmpty) return 3;
+    final lastEntry = historyBox.values.cast<Map>().lastWhere(
+      (item) => item['km'] != null,
+      orElse: () => <String, dynamic>{},
+    );
+    return int.tryParse(lastEntry['intervalBulan']?.toString() ?? '3') ?? 3;
   }
 
   int get nextOilChangeThreshold {
@@ -1766,12 +2211,14 @@ class _DashboardPageState extends State<DashboardPage>
     // Setelah ganti oli, atur batas ganti oli berikutnya relatif terhadap KM sekarang
     motorBox.put('nextOilChangeThreshold', km + _defaultOilChangeThreshold());
 
-    // Tambahkan entry riwayat untuk pencatatan ganti oli
+    // Tambahkan entry riwayat untuk pencatatan ganti oli dengan interval default
     try {
       historyBox.add({
         'km': km,
         'date': now.toIso8601String(),
         'type': 'oil_change',
+        'intervalKm': 5000,
+        'intervalBulan': 3,
       });
     } catch (e) {
       // ignore: avoid_print
